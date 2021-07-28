@@ -1,36 +1,43 @@
 #include "selfdrive/ui/qt/offroad/networking.h"
 
-#include <algorithm>
-
 #include <QDebug>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPainter>
-#include <QScrollBar>
 
-#include "selfdrive/ui/qt/util.h"
-#include "selfdrive/ui/qt/qt_window.h"
 #include "selfdrive/ui/qt/widgets/scrollview.h"
+#include "selfdrive/ui/qt/util.h"
 
+
+void NetworkStrengthWidget::paintEvent(QPaintEvent* event) {
+  QPainter p(this);
+  p.setRenderHint(QPainter::Antialiasing);
+  p.setPen(Qt::NoPen);
+  const QColor gray(0x54, 0x54, 0x54);
+  for (int i = 0, x = 0; i < 5; ++i) {
+    p.setBrush(i < strength_ ? Qt::white : gray);
+    p.drawEllipse(x, 0, 15, 15);
+    x += 20;
+  }
+}
 
 // Networking functions
 
-Networking::Networking(QWidget* parent, bool show_advanced) : QFrame(parent) {
+Networking::Networking(QWidget* parent, bool show_advanced) : QWidget(parent), show_advanced(show_advanced) {
   main_layout = new QStackedLayout(this);
 
   wifi = new WifiManager(this);
-  connect(wifi, &WifiManager::refreshSignal, this, &Networking::refresh);
   connect(wifi, &WifiManager::wrongPassword, this, &Networking::wrongPassword);
+  connect(wifi, &WifiManager::refreshSignal, this, &Networking::refresh);
 
   QWidget* wifiScreen = new QWidget(this);
   QVBoxLayout* vlayout = new QVBoxLayout(wifiScreen);
-  vlayout->setContentsMargins(20, 20, 20, 20);
   if (show_advanced) {
     QPushButton* advancedSettings = new QPushButton("추가옵션");
     advancedSettings->setObjectName("advancedBtn");
     advancedSettings->setStyleSheet("margin-right: 30px;");
     advancedSettings->setFixedSize(350, 100);
-    connect(advancedSettings, &QPushButton::clicked, [=]() { main_layout->setCurrentWidget(an); });
+    connect(advancedSettings, &QPushButton::released, [=]() { main_layout->setCurrentWidget(an); });
     vlayout->addSpacing(10);
     vlayout->addWidget(advancedSettings, 0, Qt::AlignRight);
     vlayout->addSpacing(10);
@@ -39,22 +46,13 @@ Networking::Networking(QWidget* parent, bool show_advanced) : QFrame(parent) {
   wifiWidget = new WifiUI(this, wifi);
   wifiWidget->setObjectName("wifiWidget");
   connect(wifiWidget, &WifiUI::connectToNetwork, this, &Networking::connectToNetwork);
-
-  ScrollView *wifiScroller = new ScrollView(wifiWidget, this);
-  wifiScroller->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-  vlayout->addWidget(wifiScroller, 1);
+  vlayout->addWidget(new ScrollView(wifiWidget, this), 1);
   main_layout->addWidget(wifiScreen);
 
   an = new AdvancedNetworking(this, wifi);
   connect(an, &AdvancedNetworking::backPress, [=]() { main_layout->setCurrentWidget(wifiScreen); });
   main_layout->addWidget(an);
 
-  QPalette pal = palette();
-  pal.setColor(QPalette::Background, QColor(0x29, 0x29, 0x29));
-  setAutoFillBackground(true);
-  setPalette(pal);
-
-  // TODO: revisit pressed colors
   setStyleSheet(R"(
     #wifiWidget > QPushButton, #back_btn, #advancedBtn {
       font-size: 50px;
@@ -64,6 +62,10 @@ Networking::Networking(QWidget* parent, bool show_advanced) : QFrame(parent) {
       border-radius: 30px;
       color: #dddddd;
       background-color: #444444;
+    }
+    #wifiWidget > QPushButton:disabled {
+      color: #777777;
+      background-color: #222222;
     }
   )");
   main_layout->setCurrentWidget(wifiScreen);
@@ -77,11 +79,10 @@ void Networking::refresh() {
 void Networking::connectToNetwork(const Network &n) {
   if (wifi->isKnownConnection(n.ssid)) {
     wifi->activateWifiConnection(n.ssid);
-    wifiWidget->refresh();
   } else if (n.security_type == SecurityType::OPEN) {
     wifi->connect(n);
   } else if (n.security_type == SecurityType::WPA) {
-    QString pass = InputDialog::getText("\"" + n.ssid + "\"", this, "의 패스워드를 입력하세요", true, 8);
+    QString pass = InputDialog::getText(n.ssid + "Please enter your password", 8);
     if (!pass.isEmpty()) {
       wifi->connect(n, pass);
     }
@@ -91,7 +92,7 @@ void Networking::connectToNetwork(const Network &n) {
 void Networking::wrongPassword(const QString &ssid) {
   for (Network n : wifi->seen_networks) {
     if (n.ssid == ssid) {
-      QString pass = InputDialog::getText("\"" + n.ssid +"\"", this, "의 패스워드가 틀렸습니다", true, 8);
+      QString pass = InputDialog::getText(n.ssid + " Wrong password", 8);
       if (!pass.isEmpty()) {
         wifi->connect(n, pass);
       }
@@ -119,22 +120,22 @@ AdvancedNetworking::AdvancedNetworking(QWidget* parent, WifiManager* wifi): QWid
   main_layout->setSpacing(20);
 
   // Back button
-  QPushButton* back = new QPushButton("뒤로가기");
+  QPushButton* back = new QPushButton("BACK");
   back->setObjectName("back_btn");
   back->setFixedSize(500, 100);
-  connect(back, &QPushButton::clicked, [=]() { emit backPress(); });
+  connect(back, &QPushButton::released, [=]() { emit backPress(); });
   main_layout->addWidget(back, 0, Qt::AlignLeft);
 
   // Enable tethering layout
-  ToggleControl *tetheringToggle = new ToggleControl("테더링 활성화", "", "", wifi->isTetheringEnabled());
+  ToggleControl *tetheringToggle = new ToggleControl("Enable Tethering", "", "", wifi->isTetheringEnabled());
   main_layout->addWidget(tetheringToggle);
   QObject::connect(tetheringToggle, &ToggleControl::toggleFlipped, this, &AdvancedNetworking::toggleTethering);
   main_layout->addWidget(horizontal_line(), 0);
 
   // Change tethering password
-  ButtonControl *editPasswordButton = new ButtonControl("테더링 패스워드", "변경");
-  connect(editPasswordButton, &ButtonControl::clicked, [=]() {
-    QString pass = InputDialog::getText("새로운 패스워드를 입력하세요", this, "", true, 8, wifi->getTetheringPassword());
+  ButtonControl *editPasswordButton = new ButtonControl("Tethering Password", "CHANGE");
+  connect(editPasswordButton, &ButtonControl::released, [=]() {
+    QString pass = InputDialog::getText("Enter new tethering password", this, 8, wifi->getTetheringPassword());
     if (!pass.isEmpty()) {
       wifi->changeTetheringPassword(pass);
     }
@@ -143,7 +144,7 @@ AdvancedNetworking::AdvancedNetworking(QWidget* parent, WifiManager* wifi): QWid
   main_layout->addWidget(horizontal_line(), 0);
 
   // IP address
-  ipLabel = new LabelControl("IP 주소", wifi->ipv4_address);
+  ipLabel = new LabelControl("IP Address", wifi->ipv4_address);
   main_layout->addWidget(ipLabel, 0);
   main_layout->addWidget(horizontal_line(), 0);
 
@@ -168,132 +169,75 @@ void AdvancedNetworking::toggleTethering(bool enabled) {
 
 WifiUI::WifiUI(QWidget *parent, WifiManager* wifi) : QWidget(parent), wifi(wifi) {
   main_layout = new QVBoxLayout(this);
-  main_layout->setContentsMargins(0, 0, 0, 0);
-  main_layout->setSpacing(0);
 
-  // load imgs
-  for (const auto &s : {"low", "medium", "high", "full"}) {
-    QPixmap pix(ASSET_PATH + "/offroad/icon_wifi_strength_" + s + ".svg");
-    strengths.push_back(pix.scaledToHeight(68, Qt::SmoothTransformation));
-  }
-  lock = QPixmap(ASSET_PATH + "offroad/icon_lock_closed.svg").scaledToWidth(49, Qt::SmoothTransformation);
-  checkmark = QPixmap(ASSET_PATH + "offroad/icon_checkmark.svg").scaledToWidth(49, Qt::SmoothTransformation);
-
-  QLabel *scanning = new QLabel("네트워크 검색 중...");
-  scanning->setStyleSheet("font-size: 65px;");
+  // Scan on startup
+  QLabel *scanning = new QLabel("Searching the network");
+  scanning->setStyleSheet(R"(font-size: 65px;)");
   main_layout->addWidget(scanning, 0, Qt::AlignCenter);
-
-  setStyleSheet(R"(
-    QScrollBar::handle:vertical {
-      min-height: 0px;
-      border-radius: 4px;
-      background-color: #8A8A8A;
-    }
-    #forgetBtn {
-      font-size: 32px;
-      font-weight: 600;
-      color: #292929;
-      background-color: #BDBDBD;
-      border-width: 1px solid #828282;
-      border-radius: 5px;
-      padding: 40px;
-      padding-bottom: 16px;
-      padding-top: 16px;
-    }
-    #connecting {
-      font-size: 32px;
-      font-weight: 600;
-      color: white;
-      border-radius: 0;
-      padding: 27px;
-      padding-left: 43px;
-      padding-right: 43px;
-      background-color: black;
-    }
-    #ssidLabel {
-      font-size: 55px;
-      font-weight: 300;
-      text-align: left;
-      border: none;
-      padding-top: 50px;
-      padding-bottom: 50px;
-    }
-    #ssidLabel[disconnected=false] {
-      font-weight: 500;
-    }
-  )");
+  main_layout->setSpacing(25);
 }
 
 void WifiUI::refresh() {
-  // TODO: don't rebuild this every time
   clearLayout(main_layout);
-
   if (wifi->seen_networks.size() == 0) {
-    QLabel *scanning = new QLabel("네트워크 검색중...");
-    scanning->setStyleSheet("font-size: 65px;");
+    QLabel *scanning = new QLabel("No networks found. Scanning...");
+    scanning->setStyleSheet(R"(font-size: 65px;)");
     main_layout->addWidget(scanning, 0, Qt::AlignCenter);
     return;
   }
 
-  // add networks
   int i = 0;
   for (Network &network : wifi->seen_networks) {
     QHBoxLayout *hlayout = new QHBoxLayout;
-    hlayout->setContentsMargins(44, 0, 73, 0);
-    hlayout->setSpacing(50);
 
-    // Clickable SSID label
-    QPushButton *ssidLabel = new QPushButton(network.ssid);
-    ssidLabel->setObjectName("ssidLabel");
-    ssidLabel->setEnabled(network.connected == ConnectedType::DISCONNECTED &&
-                          network.security_type != SecurityType::UNSUPPORTED);
-    ssidLabel->setProperty("disconnected", network.connected == ConnectedType::DISCONNECTED);
-    QObject::connect(ssidLabel, &QPushButton::clicked, this, [=]() { emit connectToNetwork(network); });
-    hlayout->addWidget(ssidLabel, network.connected == ConnectedType::CONNECTING ? 0 : 1);
+    ElidedLabel *ssid_label = new ElidedLabel(network.ssid);
+    ssid_label->setStyleSheet("font-size: 55px;");
+    hlayout->addWidget(ssid_label, 1, Qt::AlignLeft);
 
-    if (network.connected == ConnectedType::CONNECTING) {
-      QPushButton *connecting = new QPushButton("연결중...");
-      connecting->setObjectName("connecting");
-      hlayout->addWidget(connecting, 2, Qt::AlignLeft);
-    }
-
-    // Forget button
     if (wifi->isKnownConnection(network.ssid) && !wifi->isTetheringEnabled()) {
-      QPushButton *forgetBtn = new QPushButton("지우기");
-      forgetBtn->setObjectName("forgetBtn");
-      QObject::connect(forgetBtn, &QPushButton::clicked, [=]() {
-        if (ConfirmationDialog::confirm(QString::fromUtf8(network.ssid) + "를 지우시겠습니까?", this)) {
+      QPushButton *forgetBtn = new QPushButton();
+      QPixmap pix("../assets/offroad/icon_close.svg");
+
+      forgetBtn->setIcon(QIcon(pix));
+      forgetBtn->setIconSize(QSize(35, 35));
+      forgetBtn->setStyleSheet("QPushButton { background-color: #E22C2C; }");
+      forgetBtn->setFixedSize(100, 90);
+
+      QObject::connect(forgetBtn, &QPushButton::released, [=]() {
+        if (ConfirmationDialog::confirm(QString::fromUtf8(network.ssid) + " Are you sure you want to clear saved networks?", this)) {
           wifi->forgetConnection(network.ssid);
         }
       });
-      hlayout->addWidget(forgetBtn, 0, Qt::AlignRight);
-    }
 
-    // Status icon
-    if (network.connected == ConnectedType::CONNECTED) {
-      QLabel *connectIcon = new QLabel();
-      connectIcon->setPixmap(checkmark);
-      hlayout->addWidget(connectIcon, 0, Qt::AlignRight);
+      hlayout->addWidget(forgetBtn, 0, Qt::AlignRight);
     } else if (network.security_type == SecurityType::WPA) {
       QLabel *lockIcon = new QLabel();
-      lockIcon->setPixmap(lock);
+      QPixmap pix("../assets/offroad/icon_lock_closed.svg");
+      lockIcon->setPixmap(pix.scaledToWidth(35, Qt::SmoothTransformation));
+      lockIcon->setSizePolicy(QSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed));
+      lockIcon->setStyleSheet("QLabel { margin: 0px; padding-left: 15px; padding-right: 15px; }");
+
       hlayout->addWidget(lockIcon, 0, Qt::AlignRight);
-    } else {
-      hlayout->addSpacing(lock.width() + hlayout->spacing());
     }
 
-    // Strength indicator
-    QLabel *strength = new QLabel();
-    strength->setPixmap(strengths[std::clamp((int)network.strength/26, 0, 3)]);
-    hlayout->addWidget(strength, 0, Qt::AlignRight);
+    // strength indicator
+    unsigned int strength_scale = network.strength / 17;
+    hlayout->addWidget(new NetworkStrengthWidget(strength_scale), 0, Qt::AlignRight);
 
-    main_layout->addLayout(hlayout);
+    // connect button
+    QPushButton* btn = new QPushButton(network.security_type == SecurityType::UNSUPPORTED ? "Unable to connect" : (network.connected == ConnectedType::CONNECTED ? "Connected" : (network.connected == ConnectedType::CONNECTING ? "Connecting" : "CONNECT")));
+    btn->setDisabled(network.connected == ConnectedType::CONNECTED || network.connected == ConnectedType::CONNECTING || network.security_type == SecurityType::UNSUPPORTED);
+    btn->setFixedWidth(350);
+    QObject::connect(btn, &QPushButton::clicked, this, [=]() { emit connectToNetwork(network); });
 
+    hlayout->addWidget(btn, 0, Qt::AlignRight);
+    main_layout->addLayout(hlayout, 1);
     // Don't add the last horizontal line
     if (i+1 < wifi->seen_networks.size()) {
       main_layout->addWidget(horizontal_line(), 0);
     }
     i++;
   }
-  main_layout->addStretch(1);
+  main_layout->addStretch(3);
 }
+{"mode":"full","isActive":false}
